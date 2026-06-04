@@ -1532,8 +1532,11 @@ jarvis = [
 jarvis-app = [
     { name = "anthropic" },
     { name = "edge-tts" },
+    { name = "faster-whisper", marker = "python_full_version >= '3.11'" },
+    { name = "pynput" },
     { name = "pyqt6" },
     { name = "requests" },
+    { name = "sounddevice" },
 ]
 kimi = [
     { name = "openai" },
@@ -1609,6 +1612,7 @@ requires-dist = [
     { name = "edge-tts", marker = "extra == 'jarvis-app'" },
     { name = "faster-whisper", marker = "python_full_version >= '3.11' and extra == 'all'" },
     { name = "faster-whisper", marker = "python_full_version >= '3.11' and extra == 'jarvis'" },
+    { name = "faster-whisper", marker = "python_full_version >= '3.11' and extra == 'jarvis-app'" },
     { name = "faster-whisper", marker = "python_full_version >= '3.11' and extra == 'video'" },
     { name = "graspologic", marker = "python_full_version < '3.13' and extra == 'all'" },
     { name = "graspologic", marker = "python_full_version < '3.13' and extra == 'leiden'" },
@@ -1632,6 +1636,7 @@ requires-dist = [
     { name = "openpyxl", marker = "extra == 'google'" },
     { name = "openpyxl", marker = "extra == 'office'" },
     { name = "pynput", marker = "extra == 'jarvis'" },
+    { name = "pynput", marker = "extra == 'jarvis-app'" },
     { name = "pypdf", marker = "extra == 'all'" },
     { name = "pypdf", marker = "extra == 'pdf'" },
     { name = "pyqt6", marker = "extra == 'jarvis-app'" },
@@ -1640,6 +1645,7 @@ requires-dist = [
     { name = "rapidfuzz" },
     { name = "requests", marker = "extra == 'jarvis-app'" },
     { name = "sounddevice", marker = "extra == 'jarvis'" },
+    { name = "sounddevice", marker = "extra == 'jarvis-app'" },
     { name = "tiktoken", marker = "extra == 'all'" },
     { name = "tiktoken", marker = "extra == 'gemini'" },
     { name = "tiktoken", marker = "extra == 'kimi'" },

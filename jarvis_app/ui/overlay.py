@@ -1,8 +1,7 @@
 """Main Jarvis overlay — frameless, always-on-top, dark theme."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QPoint, QSize
-from PyQt6.QtGui import QColor, QPainter, QPainterPath
+from PyQt6.QtCore import Qt, QPoint, QSize, QTimer
 from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTabWidget, QVBoxLayout, QWidget,
@@ -18,6 +17,7 @@ class Overlay(QWidget):
         super().__init__()
         self._drag_pos: QPoint | None = None
         self._worker: ResponseWorker | None = None
+        self._ptw = None          # PushToTalkWorker, started after show()
         self._setup_window()
         self._build_ui()
         self._position_window()
@@ -30,10 +30,9 @@ class Overlay(QWidget):
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Tool
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(QSize(500, 580))
         self.resize(500, 600)
-        self.setStyleSheet("font-family: 'Segoe UI', sans-serif;")
+        self.setStyleSheet("background: #1a1a2e; font-family: 'Segoe UI', sans-serif;")
 
     def _position_window(self) -> None:
         from PyQt6.QtWidgets import QApplication
@@ -119,14 +118,32 @@ class Overlay(QWidget):
 
     def _build_input_bar(self) -> QWidget:
         bar = QWidget()
-        bar.setFixedHeight(52)
-        bar.setStyleSheet("background: #16213e; border-radius: 0 0 14px 14px; padding: 0 10px;")
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(10, 6, 10, 6)
+        bar.setStyleSheet("background: #16213e; border-radius: 0 0 14px 14px;")
+
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(10, 6, 10, 6)
+        v.setSpacing(3)
+
+        # ── status line (voice feedback) ──────────────────────────────────────
+        self._voice_status = QLabel("F9 halten zum Sprechen")
+        self._voice_status.setStyleSheet(
+            "color: #555; font-size: 11px; padding: 0 2px;"
+        )
+        v.addWidget(self._voice_status)
+
+        # ── input row ─────────────────────────────────────────────────────────
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(8)
 
+        self._mic_btn = QPushButton("🎤")
+        self._mic_btn.setFixedSize(36, 36)
+        self._mic_btn.setToolTip("F9 halten zum Sprechen")
+        self._mic_btn.setStyleSheet(_MIC_IDLE_STYLE)
+
         self._input = QLineEdit()
-        self._input.setPlaceholderText("Jarvis, was kann ich für dich tun?  (Enter zum Senden)")
+        self._input.setPlaceholderText("Schreibe oder halte F9 zum Sprechen…")
         self._input.setStyleSheet(
             "QLineEdit { background:#1a1a2e; border:1px solid #0f3460; border-radius:8px; "
             "padding:6px 12px; color:#e0e0e0; font-size:13px; }"
@@ -142,9 +159,45 @@ class Overlay(QWidget):
         )
         send_btn.clicked.connect(self._on_send)
 
+        h.addWidget(self._mic_btn)
         h.addWidget(self._input)
         h.addWidget(send_btn)
+        v.addWidget(row)
         return bar
+
+    # ── push-to-talk ─────────────────────────────────────────────────────────
+
+    def start_push_to_talk(self) -> None:
+        """Call once after the window is shown to start the global F9 listener."""
+        from jarvis_app.ui.push_to_talk import PushToTalkWorker
+        self._ptw = PushToTalkWorker()
+        self._ptw.recording_started.connect(self._on_recording_started)
+        self._ptw.recording_stopped.connect(self._on_recording_stopped)
+        self._ptw.transcription_ready.connect(self._on_voice_text)
+        self._ptw.status_message.connect(self._on_voice_status)
+        self._ptw.start()
+
+    def _on_recording_started(self) -> None:
+        self._mic_btn.setStyleSheet(_MIC_ACTIVE_STYLE)
+        self._voice_status.setText("🔴 Aufnahme läuft… F9 loslassen zum Senden")
+        self._voice_status.setStyleSheet("color: #e05555; font-size: 11px; padding: 0 2px;")
+
+    def _on_recording_stopped(self) -> None:
+        self._mic_btn.setStyleSheet(_MIC_IDLE_STYLE)
+        self._voice_status.setText("⏳ Transkribiere…")
+        self._voice_status.setStyleSheet("color: #888; font-size: 11px; padding: 0 2px;")
+
+    def _on_voice_text(self, text: str) -> None:
+        self._voice_status.setText("F9 halten zum Sprechen")
+        self._voice_status.setStyleSheet("color: #555; font-size: 11px; padding: 0 2px;")
+        self._input.setText(text)
+        self._on_send()
+
+    def _on_voice_status(self, msg: str) -> None:
+        self._voice_status.setText(msg)
+        self._voice_status.setStyleSheet("color: #888; font-size: 11px; padding: 0 2px;")
+        # Reset to default hint after 4 seconds
+        QTimer.singleShot(4000, lambda: self._voice_status.setText("F9 halten zum Sprechen"))
 
     # ── message handling ──────────────────────────────────────────────────────
 
@@ -153,7 +206,7 @@ class Overlay(QWidget):
         if not text or (self._worker and self._worker.isRunning()):
             return
         self._input.clear()
-        self._tabs.setCurrentIndex(1)  # switch to Chat tab
+        self._tabs.setCurrentIndex(1)
         self._chat.add_user(text)
         self._chat.add_system("⏳ Jarvis denkt…")
         self._start_worker(text)
@@ -181,14 +234,14 @@ class Overlay(QWidget):
         if self._worker:
             self._worker.set_confirmed(dialog.confirmed)
 
-    # ── permission center ────────────────────────────────────────────────────
+    # ── permission center ─────────────────────────────────────────────────────
 
     def _show_permission_center(self) -> None:
         from jarvis_app.ui.permission_center import PermissionCenter
         dlg = PermissionCenter(parent=self)
         dlg.exec()
 
-    # ── drag to move ─────────────────────────────────────────────────────────
+    # ── drag to move ──────────────────────────────────────────────────────────
 
     def _title_mouse_press(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -201,7 +254,7 @@ class Overlay(QWidget):
     def _title_mouse_release(self, event) -> None:
         self._drag_pos = None
 
-    # ── key events ───────────────────────────────────────────────────────────
+    # ── key events ────────────────────────────────────────────────────────────
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape:
@@ -209,19 +262,22 @@ class Overlay(QWidget):
         else:
             super().keyPressEvent(event)
 
-    # ── drop shadow behind the card ──────────────────────────────────────────
 
-    def paintEvent(self, event) -> None:
-        from PyQt6.QtCore import QRectF
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(self._card.geometry()), 14, 14)
-        painter.fillPath(path, QColor(0, 0, 0, 50))
-
+# ── styles ────────────────────────────────────────────────────────────────────
 
 _ICON_BTN_STYLE = (
     "QPushButton { background: transparent; color: #888; border: none; "
     "border-radius: 4px; font-size: 13px; }"
     "QPushButton:hover { background: #0f3460; color: #e0e0e0; }"
+)
+
+_MIC_IDLE_STYLE = (
+    "QPushButton { background: transparent; border: 1px solid #0f3460; "
+    "border-radius: 8px; font-size: 16px; }"
+    "QPushButton:hover { border-color: #4ecca3; }"
+)
+
+_MIC_ACTIVE_STYLE = (
+    "QPushButton { background: #3a0000; border: 2px solid #e05555; "
+    "border-radius: 8px; font-size: 16px; }"
 )
