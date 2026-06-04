@@ -105,3 +105,30 @@ If `graphify-out/` exists in the project:
 - Read `graphify-out/GRAPH_REPORT.md` before answering architecture or codebase questions — it contains pre-computed god nodes and community structure.
 - If `graphify-out/wiki/index.md` exists, navigate it instead of reading raw files.
 - After modifying code files, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## Jarvis assistant (`jarvis/`)
+
+A push-to-talk voice assistant that answers questions about the codebase using the graphify knowledge graph.
+
+**Install deps:**
+```bash
+uv sync --extra jarvis
+```
+
+**Run:**
+```bash
+python -m jarvis
+```
+Hold F9 to record, release to send. Requires `graphify-out/graph.json` (run `graphify .` first) and an LLM API key (`ANTHROPIC_API_KEY` or similar).
+
+**Modules:**
+| File | Role |
+|---|---|
+| `jarvis/voice.py` | STT via faster-whisper, TTS via edge-tts + Windows winmm playback |
+| `jarvis/knowledge.py` | Loads graph.json, answers free-form questions via `graphify.llm._call_llm` |
+| `jarvis/commands.py` | Keyword router → tests / god nodes / architecture / free LLM query |
+| `jarvis/main.py` | pynput push-to-talk loop, spawns recording thread per keypress |
+
+**Voice:** `de-DE-ConradNeural` (German male, edge-tts). Change `TTS_VOICE` in `voice.py` to switch.
+
+**Adding a command:** add keywords to `_KEYWORDS` in `commands.py` and a handler branch in `route()`.

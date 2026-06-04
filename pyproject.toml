@@ -69,6 +69,8 @@ sql = ["tree-sitter-sql"]
 # must compile from source (needs a C toolchain + python3-dev). Keeping it optional
 # avoids breaking the default `uv tool install graphifyy` for everyone (#1104).
 dm = ["tree-sitter-dm"]
+jarvis = ["edge-tts", "sounddevice", "pynput", "faster-whisper; python_version >= '3.11'", "anthropic"]
+jarvis-app = ["PyQt6", "edge-tts", "requests", "anthropic"]
 all = ["mcp", "neo4j", "pypdf", "markdownify", "watchdog", "graspologic; python_version < '3.13'", "python-docx", "openpyxl", "faster-whisper; python_version >= '3.11'", "yt-dlp", "matplotlib", "openai", "tiktoken", "boto3", "anthropic", "tree-sitter-sql", "jieba", "tree-sitter-dm"]
 
 [project.scripts]
