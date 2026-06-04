@@ -27,9 +27,9 @@ class Overlay(QWidget):
     def _setup_window(self) -> None:
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
+            Qt.WindowType.WindowStaysOnTopHint
         )
+        self.setWindowTitle("Jarvis")
         self.setMinimumSize(QSize(500, 580))
         self.resize(500, 600)
         self.setStyleSheet("background: #1a1a2e; font-family: 'Segoe UI', sans-serif;")
@@ -37,8 +37,14 @@ class Overlay(QWidget):
     def _position_window(self) -> None:
         from PyQt6.QtWidgets import QApplication
         screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.right() - self.width() - 20,
-                  screen.bottom() - self.height() - 20)
+        x = screen.x() + (screen.width() - self.width()) // 2
+        y = screen.y() + (screen.height() - self.height()) // 2
+        self.move(x, y)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.raise_()
+        self.activateWindow()
 
     # ── UI build ──────────────────────────────────────────────────────────────
 
