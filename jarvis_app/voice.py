@@ -6,6 +6,7 @@ import ctypes
 import os
 import tempfile
 import threading
+import time
 from typing import TYPE_CHECKING
 
 from jarvis_app import config
@@ -13,20 +14,57 @@ from jarvis_app import config
 if TYPE_CHECKING:
     import numpy as np
 
-# ── TTS ───────────────────────────────────────────────────────────────────────
+# ── TTS guard — prevent duplicate / parallel speaks ───────────────────────────
+
+_speak_lock    = threading.Lock()
+_is_speaking   = False
+_last_text     = ""
+_last_time     = 0.0
+_DEDUP_SECS    = 5.0   # same text within 5 s → skip
+
 
 def speak(text: str) -> None:
-    """Speak text in a background daemon thread (non-blocking)."""
+    """Speak text in a background daemon thread (non-blocking).
+
+    Guard rules:
+    - TTS disabled in settings → silent
+    - Identical text spoken within _DEDUP_SECS → skipped (dedup)
+    - Another speak() is already running → new text replaces queue (last-wins)
+    """
+    global _last_text, _last_time
+
     if not config.tts_enabled():
         return
-    threading.Thread(target=_speak_sync, args=(text,), daemon=True).start()
+
+    now = time.monotonic()
+    with _speak_lock:
+        if text == _last_text and now - _last_time < _DEDUP_SECS:
+            _log_tts("skip-dedup", text)
+            return
+        _last_text = text
+        _last_time = now
+
+    _log_tts("start", text)
+    threading.Thread(target=_speak_guarded, args=(text,), daemon=True).start()
+
+
+def _speak_guarded(text: str) -> None:
+    global _is_speaking
+    if _is_speaking:
+        _log_tts("skip-busy", text)
+        return
+    _is_speaking = True
+    try:
+        _speak_sync(text)
+    finally:
+        _is_speaking = False
 
 
 def _speak_sync(text: str) -> None:
     try:
         asyncio.run(_speak_async(text))
     except Exception as e:
-        print(f"[TTS] Fehler: {e}")
+        _log_tts("error", f"{e}")
 
 
 async def _speak_async(text: str) -> None:
@@ -40,8 +78,9 @@ async def _speak_async(text: str) -> None:
     try:
         await edge_tts.Communicate(text, config.tts_voice()).save(tmp)
         _play_mp3(tmp)
+        _log_tts("done", text)
     except Exception as e:
-        print(f"[TTS] Ausgabe-Fehler: {e}")
+        _log_tts("error", f"{e}")
     finally:
         try:
             os.unlink(tmp)
@@ -58,7 +97,26 @@ def _play_mp3(path: str) -> None:
         winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
         winmm.mciSendStringW(f"close {alias}", None, 0, None)
     except Exception as e:
-        print(f"[TTS] Wiedergabe-Fehler: {e}")
+        _log_tts("play-error", f"{e}")
+
+
+def _log_tts(event: str, text: str) -> None:
+    """Write a TTS event to the action log (no secrets, text truncated)."""
+    try:
+        from jarvis_app import config as _cfg
+        import json
+        from datetime import datetime
+        entry = {
+            "ts":     datetime.now().isoformat(timespec="seconds"),
+            "intent": "_tts",
+            "desc":   f"{event}: {text[:60]}",
+            "level":  "tts",
+            "decision": event,
+        }
+        with open(_cfg.ACTION_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 # ── STT ───────────────────────────────────────────────────────────────────────
@@ -130,7 +188,7 @@ def record_until_silence(
 
     chunks: list = []
     stop_event    = threading.Event()
-    silence_at: list = [None]   # [float | None] — mutable for closure
+    silence_at: list = [None]
     started_at    = _time.monotonic()
 
     def _cb(indata, frames, t, status):
