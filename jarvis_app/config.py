@@ -91,3 +91,15 @@ def wake_word_threshold() -> float:
         return float(get("wake_word_threshold", "0.5"))
     except (TypeError, ValueError):
         return 0.5
+
+
+def set_wake_word_threshold(v: float) -> None:
+    set_("wake_word_threshold", str(round(float(v), 3)))
+
+
+def set_tts_voice(voice: str) -> None:
+    set_("tts_voice", voice)
+
+
+def set_city(city_: str) -> None:
+    set_("city", city_)

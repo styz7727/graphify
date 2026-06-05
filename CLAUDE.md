@@ -106,7 +106,7 @@ If `graphify-out/` exists in the project:
 - If `graphify-out/wiki/index.md` exists, navigate it instead of reading raw files.
 - After modifying code files, run `graphify update .` to keep the graph current (AST-only, no API cost).
 
-## Jarvis Desktop App (`jarvis_app/`) — Version 4
+## Jarvis Desktop App (`jarvis_app/`) — Version 5
 
 Full-featured Windows desktop assistant with voice I/O, intent routing, skills, and memory.
 
@@ -155,17 +155,32 @@ uv run python -m jarvis_app
 | recording (F9 or auto) | "🔴 Aufnahme läuft…" | red |
 | transcribing | "⏳ Transkribiere…" | grey |
 
+**Version 5 — neue Features:**
+- **🩺 Startup Self-Test** — prüft automatisch 2 s nach Start alle Komponenten; öffnet Debug-Panel bei Fehlern
+- **🐛 Debug-Panel** (Titelleiste oder Tray) — 4 Tabs: System-Check, Aktions-Log, Selbst-Analyse, Info
+- **💡 Selbst-Analyse** — Logs auswerten, Muster erkennen, Vorschläge generieren, Git-Status (read-only)
+- **Claude-Code-Prompt-Generator** — erzeugt einen fertigen Analyse-Prompt aus aktuellem Systemzustand
+- **⚙️ Erweiterte Einstellungen** — TTS-Stimme, Wake-Word-Threshold, Wetter-Stadt, Autostart, API-Key-Status
+- **Autostart optional** — Windows Registry HKCU (kein Admin), toggle in Einstellungen
+- **Verbessertes Tray-Menü** — Diagnose, Einstellungen, Debug, Permission Center
+- **API-Key-Check maskiert** — zeigt `...xxxx` + Länge, nie den vollen Key
+- **v5-Label** in der Titelleiste
+
 **Key files:**
 | File | Role |
 |------|------|
+| `jarvis_app/startup_check.py` | Startup self-test: 8 Checks, `run_startup_checks()`, `summary()` |
+| `jarvis_app/autostart.py` | Windows Registry HKCU autostart — kein Admin nötig |
 | `jarvis_app/wake_word.py` | `WakeWordListener(QThread)` — OpenWakeWord detection |
 | `jarvis_app/voice.py` | STT (faster-whisper) + TTS (edge-tts) + `record_until_silence()` |
-| `jarvis_app/config.py` | QSettings persistence; `wake_word_enabled()`, `wake_word_threshold()` |
-| `jarvis_app/ui/overlay.py` | Main window; wires F9 + Wake Word + settings |
-| `jarvis_app/ui/settings_panel.py` | Settings dialog (wake word toggle) |
+| `jarvis_app/config.py` | QSettings persistence; alle Getter und Setter |
+| `jarvis_app/ui/overlay.py` | Main window; F9 + Wake Word + Debug + Self-Test |
+| `jarvis_app/ui/debug_panel.py` | Debug & Diagnose — 4 Tabs, Selbst-Analyse, Git-Status, Prompt-Gen |
+| `jarvis_app/ui/settings_panel.py` | Vollständige Einstellungen (v5) |
+| `jarvis_app/ui/app.py` | Tray-Menü + App-Lifecycle |
 | `jarvis_app/ui/push_to_talk.py` | F9 global key listener |
 
-**Safety rules (unchanged from v3):**
+**Safety rules (unchanged):**
 - CONFIRM required for: apps, browser, web search, TradingView, focus modes
 - BLOCKED always: shell exec, read secrets, send messages, delete files, install packages
 - All actions logged to `~/.jarvis_app/action_log.jsonl`

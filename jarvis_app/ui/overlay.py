@@ -114,6 +114,8 @@ class Overlay(QWidget):
         icon.setStyleSheet("font-size: 18px;")
         title = QLabel("Jarvis")
         title.setStyleSheet("font-size: 15px; font-weight: bold; color: #4ecca3;")
+        ver_lbl = QLabel("v5")
+        ver_lbl.setStyleSheet("font-size: 10px; color: #333; margin-left: 2px; margin-top: 4px;")
 
         perm_btn = QPushButton("🔒")
         perm_btn.setFixedSize(28, 28)
@@ -127,6 +129,12 @@ class Overlay(QWidget):
         settings_btn.setStyleSheet(_ICON_BTN_STYLE)
         settings_btn.clicked.connect(self._show_settings)
 
+        debug_btn = QPushButton("🐛")
+        debug_btn.setFixedSize(28, 28)
+        debug_btn.setToolTip("Debug & Diagnose")
+        debug_btn.setStyleSheet(_ICON_BTN_STYLE)
+        debug_btn.clicked.connect(self._show_debug_panel)
+
         hide_btn = QPushButton("—")
         hide_btn.setFixedSize(28, 28)
         hide_btn.setStyleSheet(_ICON_BTN_STYLE)
@@ -134,9 +142,11 @@ class Overlay(QWidget):
 
         h.addWidget(icon)
         h.addWidget(title)
+        h.addWidget(ver_lbl)
         h.addStretch()
         h.addWidget(perm_btn)
         h.addWidget(settings_btn)
+        h.addWidget(debug_btn)
         h.addWidget(hide_btn)
         return bar
 
@@ -344,6 +354,32 @@ class Overlay(QWidget):
             self._wwl.wait(3000)
             self._wwl = None
         self._set_idle_status()
+
+    # ── debug panel ───────────────────────────────────────────────────────────
+
+    def _show_debug_panel(self) -> None:
+        from jarvis_app.ui.debug_panel import DebugPanel
+        DebugPanel(parent=self).exec()
+
+    # ── startup self-test ─────────────────────────────────────────────────────
+
+    def start_self_test(self) -> None:
+        """Run startup check 2 s after launch; auto-open debug panel if errors found."""
+        QTimer.singleShot(2000, self._run_self_test)
+
+    def _run_self_test(self) -> None:
+        from jarvis_app.startup_check import run_startup_checks, has_errors, summary
+        results = run_startup_checks()
+        msg = summary(results)
+        if has_errors(results):
+            self._voice_status.setText(f"🔴 {msg}")
+            self._voice_status.setStyleSheet("color: #e05555; font-size: 11px; padding: 0 2px;")
+            # Auto-open debug panel so the user can see what's wrong
+            self._show_debug_panel()
+        else:
+            self._voice_status.setText(f"✓ {msg}")
+            self._voice_status.setStyleSheet("color: #4ecca3; font-size: 11px; padding: 0 2px;")
+            QTimer.singleShot(5000, self._set_idle_status)
 
     # ── permission center ─────────────────────────────────────────────────────
 
