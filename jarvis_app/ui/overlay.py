@@ -1,7 +1,7 @@
 """Main Jarvis overlay — frameless, always-on-top, dark theme."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QPoint, QSize, QTimer
+from PyQt6.QtCore import Qt, QPoint, QSize, QTimer, QThread, pyqtSignal as Signal
 from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTabWidget, QVBoxLayout, QWidget,
@@ -12,12 +12,39 @@ from jarvis_app.ui.dashboard import DashboardWidget
 from jarvis_app.worker import ResponseWorker
 
 
+# ── Helper thread: auto-record + transcribe after wake word ──────────────────
+
+class _WakeAutoThread(QThread):
+    """Records speech after wake word detection, then transcribes and emits text."""
+
+    transcription_ready = Signal(str)
+    status_message      = Signal(str)
+
+    def run(self) -> None:
+        from jarvis_app import voice
+        self.status_message.emit("🔴 Aufnahme läuft… (spreche deinen Befehl)")
+        audio = voice.record_until_silence(max_duration=10.0, silence_duration=2.0)
+        if audio is None or len(audio) < voice._SAMPLE_RATE * 0.3:
+            self.status_message.emit("Kein Befehl gehört — nochmal 'Hey Jarvis' sagen")
+            return
+        self.status_message.emit("⏳ Transkribiere…")
+        text = voice.transcribe(audio)
+        if text:
+            self.transcription_ready.emit(text)
+        else:
+            self.status_message.emit("Kein Text erkannt — nochmal versuchen")
+
+
+# ── Main overlay window ───────────────────────────────────────────────────────
+
 class Overlay(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._drag_pos: QPoint | None = None
         self._worker: ResponseWorker | None = None
-        self._ptw = None          # PushToTalkWorker, started after show()
+        self._ptw     = None   # PushToTalkWorker
+        self._wwl     = None   # WakeWordListener
+        self._auto    = None   # _WakeAutoThread
         self._setup_window()
         self._build_ui()
         self._position_window()
@@ -37,7 +64,7 @@ class Overlay(QWidget):
     def _position_window(self) -> None:
         from PyQt6.QtWidgets import QApplication
         screen = QApplication.primaryScreen().availableGeometry()
-        x = screen.x() + (screen.width() - self.width()) // 2
+        x = screen.x() + (screen.width()  - self.width())  // 2
         y = screen.y() + (screen.height() - self.height()) // 2
         self.move(x, y)
 
@@ -83,7 +110,7 @@ class Overlay(QWidget):
         h = QHBoxLayout(bar)
         h.setContentsMargins(14, 0, 10, 0)
 
-        icon = QLabel("🤖")
+        icon  = QLabel("🤖")
         icon.setStyleSheet("font-size: 18px;")
         title = QLabel("Jarvis")
         title.setStyleSheet("font-size: 15px; font-weight: bold; color: #4ecca3;")
@@ -94,6 +121,12 @@ class Overlay(QWidget):
         perm_btn.setStyleSheet(_ICON_BTN_STYLE)
         perm_btn.clicked.connect(self._show_permission_center)
 
+        settings_btn = QPushButton("⚙️")
+        settings_btn.setFixedSize(28, 28)
+        settings_btn.setToolTip("Einstellungen")
+        settings_btn.setStyleSheet(_ICON_BTN_STYLE)
+        settings_btn.clicked.connect(self._show_settings)
+
         hide_btn = QPushButton("—")
         hide_btn.setFixedSize(28, 28)
         hide_btn.setStyleSheet(_ICON_BTN_STYLE)
@@ -103,6 +136,7 @@ class Overlay(QWidget):
         h.addWidget(title)
         h.addStretch()
         h.addWidget(perm_btn)
+        h.addWidget(settings_btn)
         h.addWidget(hide_btn)
         return bar
 
@@ -114,12 +148,12 @@ class Overlay(QWidget):
             QTabBar::tab:selected { background: #1a1a2e; color: #4ecca3;
                                     border-bottom: 2px solid #4ecca3; }
         """)
-        self._chat = ChatWidget()
+        self._chat      = ChatWidget()
         self._dashboard = DashboardWidget()
         self._dashboard.command_requested = self._submit_from_dashboard
 
         self._tabs.addTab(self._dashboard, "🏠 Dashboard")
-        self._tabs.addTab(self._chat, "💬 Chat")
+        self._tabs.addTab(self._chat,      "💬 Chat")
         return self._tabs
 
     def _build_input_bar(self) -> QWidget:
@@ -130,16 +164,14 @@ class Overlay(QWidget):
         v.setContentsMargins(10, 6, 10, 6)
         v.setSpacing(3)
 
-        # ── status line (voice feedback) ──────────────────────────────────────
+        # ── mic status line ───────────────────────────────────────────────────
         self._voice_status = QLabel("F9 halten zum Sprechen")
-        self._voice_status.setStyleSheet(
-            "color: #555; font-size: 11px; padding: 0 2px;"
-        )
+        self._voice_status.setStyleSheet("color: #555; font-size: 11px; padding: 0 2px;")
         v.addWidget(self._voice_status)
 
         # ── input row ─────────────────────────────────────────────────────────
         row = QWidget()
-        h = QHBoxLayout(row)
+        h   = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(8)
 
@@ -171,10 +203,10 @@ class Overlay(QWidget):
         v.addWidget(row)
         return bar
 
-    # ── push-to-talk ─────────────────────────────────────────────────────────
+    # ── push-to-talk (F9) ────────────────────────────────────────────────────
 
     def start_push_to_talk(self) -> None:
-        """Call once after the window is shown to start the global F9 listener."""
+        """Call once after show() to start the global F9 listener."""
         from jarvis_app.ui.push_to_talk import PushToTalkWorker
         self._ptw = PushToTalkWorker()
         self._ptw.recording_started.connect(self._on_recording_started)
@@ -194,16 +226,66 @@ class Overlay(QWidget):
         self._voice_status.setStyleSheet("color: #888; font-size: 11px; padding: 0 2px;")
 
     def _on_voice_text(self, text: str) -> None:
-        self._voice_status.setText("F9 halten zum Sprechen")
-        self._voice_status.setStyleSheet("color: #555; font-size: 11px; padding: 0 2px;")
+        self._set_idle_status()
         self._input.setText(text)
         self._on_send()
 
     def _on_voice_status(self, msg: str) -> None:
         self._voice_status.setText(msg)
         self._voice_status.setStyleSheet("color: #888; font-size: 11px; padding: 0 2px;")
-        # Reset to default hint after 4 seconds
-        QTimer.singleShot(4000, lambda: self._voice_status.setText("F9 halten zum Sprechen"))
+        QTimer.singleShot(4000, self._set_idle_status)
+
+    # ── wake word listener ────────────────────────────────────────────────────
+
+    def start_wake_word_listener(self) -> None:
+        """Start WakeWordListener if wake word is enabled in settings."""
+        from jarvis_app import config
+        if not config.wake_word_enabled():
+            return
+        from jarvis_app.wake_word import WakeWordListener
+        self._wwl = WakeWordListener()
+        self._wwl.wake_word_detected.connect(self._on_wake_word_detected)
+        self._wwl.status_message.connect(self._on_wake_status)
+        self._wwl.start()
+
+    def _on_wake_status(self, msg: str) -> None:
+        self._voice_status.setText(msg)
+        if "aktiv" in msg:
+            self._voice_status.setStyleSheet("color: #4ecca3; font-size: 11px; padding: 0 2px;")
+            self._mic_btn.setStyleSheet(_MIC_WAKEWORD_STYLE)
+        else:
+            self._voice_status.setStyleSheet("color: #888; font-size: 11px; padding: 0 2px;")
+
+    def _on_wake_word_detected(self) -> None:
+        """Wake word fired — pause listener, start auto-record."""
+        if self._wwl:
+            self._wwl.pause()
+
+        self._mic_btn.setStyleSheet(_MIC_ACTIVE_STYLE)
+        self._voice_status.setText("🟡 'Hey Jarvis' erkannt — spreche deinen Befehl…")
+        self._voice_status.setStyleSheet("color: #ffa500; font-size: 11px; padding: 0 2px;")
+
+        self._auto = _WakeAutoThread()
+        self._auto.transcription_ready.connect(self._on_voice_text)
+        self._auto.status_message.connect(self._on_wake_auto_status)
+        self._auto.start()
+
+    def _on_wake_auto_status(self, msg: str) -> None:
+        self._voice_status.setText(msg)
+        if "Aufnahme" in msg:
+            self._voice_status.setStyleSheet("color: #e05555; font-size: 11px; padding: 0 2px;")
+            self._mic_btn.setStyleSheet(_MIC_ACTIVE_STYLE)
+        else:
+            self._voice_status.setStyleSheet("color: #888; font-size: 11px; padding: 0 2px;")
+            self._mic_btn.setStyleSheet(_MIC_IDLE_STYLE)
+            if "Kein" in msg:
+                # Recording failed — resume listener
+                QTimer.singleShot(1000, self._resume_wake_word)
+
+    def _resume_wake_word(self) -> None:
+        if self._wwl and self._wwl.isRunning():
+            self._wwl.resume()
+        self._set_idle_status()
 
     # ── message handling ──────────────────────────────────────────────────────
 
@@ -232,6 +314,8 @@ class Overlay(QWidget):
 
     def _on_response(self, question: str, answer: str) -> None:
         self._chat.add_jarvis(answer)
+        # Resume wake word listener after response; 2 s delay avoids echo triggers
+        QTimer.singleShot(2000, self._resume_wake_word)
 
     def _on_confirm(self, description: str) -> None:
         from jarvis_app.safety.confirmation import ConfirmationDialog
@@ -240,12 +324,46 @@ class Overlay(QWidget):
         if self._worker:
             self._worker.set_confirmed(dialog.confirmed)
 
+    # ── settings ─────────────────────────────────────────────────────────────
+
+    def _show_settings(self) -> None:
+        from jarvis_app.ui.settings_panel import SettingsDialog
+        dlg = SettingsDialog(parent=self)
+        dlg.exec()
+        self._apply_settings()
+
+    def _apply_settings(self) -> None:
+        from jarvis_app import config
+        enabled    = config.wake_word_enabled()
+        wwl_active = bool(self._wwl and self._wwl.isRunning())
+
+        if enabled and not wwl_active:
+            self.start_wake_word_listener()
+        elif not enabled and wwl_active:
+            self._wwl.stop_listening()
+            self._wwl.wait(3000)
+            self._wwl = None
+        self._set_idle_status()
+
     # ── permission center ─────────────────────────────────────────────────────
 
     def _show_permission_center(self) -> None:
         from jarvis_app.ui.permission_center import PermissionCenter
         dlg = PermissionCenter(parent=self)
         dlg.exec()
+
+    # ── shared helpers ────────────────────────────────────────────────────────
+
+    def _set_idle_status(self) -> None:
+        from jarvis_app import config
+        if config.wake_word_enabled() and self._wwl and self._wwl.isRunning():
+            self._voice_status.setText("🟢 Wake Word aktiv — sage 'Hey Jarvis'")
+            self._voice_status.setStyleSheet("color: #4ecca3; font-size: 11px; padding: 0 2px;")
+            self._mic_btn.setStyleSheet(_MIC_WAKEWORD_STYLE)
+        else:
+            self._voice_status.setText("F9 halten zum Sprechen")
+            self._voice_status.setStyleSheet("color: #555; font-size: 11px; padding: 0 2px;")
+            self._mic_btn.setStyleSheet(_MIC_IDLE_STYLE)
 
     # ── drag to move ──────────────────────────────────────────────────────────
 
@@ -285,5 +403,10 @@ _MIC_IDLE_STYLE = (
 
 _MIC_ACTIVE_STYLE = (
     "QPushButton { background: #3a0000; border: 2px solid #e05555; "
+    "border-radius: 8px; font-size: 16px; }"
+)
+
+_MIC_WAKEWORD_STYLE = (
+    "QPushButton { background: #001a0d; border: 1px solid #4ecca3; "
     "border-radius: 8px; font-size: 16px; }"
 )

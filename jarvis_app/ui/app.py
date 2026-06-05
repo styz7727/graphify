@@ -66,4 +66,5 @@ class JarvisApp:
     def run(self) -> int:
         self._overlay.show()
         self._overlay.start_push_to_talk()
+        self._overlay.start_wake_word_listener()
         return self._app.exec()

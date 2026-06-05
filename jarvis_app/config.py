@@ -75,3 +75,19 @@ def app_whitelist() -> dict[str, str]:
 def tts_enabled() -> bool:
     v = get("tts_enabled", "true")
     return str(v).lower() not in ("false", "0", "no")
+
+
+def wake_word_enabled() -> bool:
+    v = get("wake_word_enabled", "false")
+    return str(v).lower() in ("true", "1", "yes")
+
+
+def set_wake_word_enabled(v: bool) -> None:
+    set_("wake_word_enabled", "true" if v else "false")
+
+
+def wake_word_threshold() -> float:
+    try:
+        return float(get("wake_word_threshold", "0.5"))
+    except (TypeError, ValueError):
+        return 0.5

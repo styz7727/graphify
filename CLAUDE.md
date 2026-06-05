@@ -106,6 +106,70 @@ If `graphify-out/` exists in the project:
 - If `graphify-out/wiki/index.md` exists, navigate it instead of reading raw files.
 - After modifying code files, run `graphify update .` to keep the graph current (AST-only, no API cost).
 
+## Jarvis Desktop App (`jarvis_app/`) — Version 4
+
+Full-featured Windows desktop assistant with voice I/O, intent routing, skills, and memory.
+
+**Install deps:**
+```bash
+uv sync --extra jarvis-app
+```
+
+**Run:**
+```bash
+uv run python -m jarvis_app
+```
+
+**Input modes:**
+- **F9 Push-to-talk** — hold F9, speak, release to transcribe and send
+- **Wake Word** — say "Hey Jarvis" (requires openwakeword; enable in ⚙️ Settings)
+- **Text** — type in the input field and press Enter / →
+
+**Wake Word setup:**
+1. Click ⚙️ in the title bar → enable "Hey Jarvis"
+2. On first run the `hey_jarvis_v0.1` ONNX model is downloaded from HuggingFace (~1 MB)
+3. The mic icon turns green when Wake Word is active
+4. Speak your command; recording stops automatically after ~2 s of silence
+
+**Manual model install (offline):**
+```
+# Download hey_jarvis_v0.1.onnx from:
+# https://huggingface.co/davidscripka/OpenWakeWord
+# Place in: <python-env>/Lib/site-packages/openwakeword/resources/models/
+```
+
+**Wake Word — privacy:**
+- Audio is processed in-memory only; nothing is stored or transmitted
+- The listener exits if Wake Word is disabled in settings
+- The mic icon shows the current state at all times:
+  - Grey border = idle (only F9 active)
+  - Green border = Wake Word listening
+  - Red background = recording in progress
+
+**Mic status states:**
+| State | Label | Mic icon |
+|-------|-------|----------|
+| idle | "F9 halten zum Sprechen" | grey |
+| wake word active | "🟢 Wake Word aktiv — sage 'Hey Jarvis'" | green border |
+| wake word detected | "🟡 'Hey Jarvis' erkannt — spreche deinen Befehl…" | red |
+| recording (F9 or auto) | "🔴 Aufnahme läuft…" | red |
+| transcribing | "⏳ Transkribiere…" | grey |
+
+**Key files:**
+| File | Role |
+|------|------|
+| `jarvis_app/wake_word.py` | `WakeWordListener(QThread)` — OpenWakeWord detection |
+| `jarvis_app/voice.py` | STT (faster-whisper) + TTS (edge-tts) + `record_until_silence()` |
+| `jarvis_app/config.py` | QSettings persistence; `wake_word_enabled()`, `wake_word_threshold()` |
+| `jarvis_app/ui/overlay.py` | Main window; wires F9 + Wake Word + settings |
+| `jarvis_app/ui/settings_panel.py` | Settings dialog (wake word toggle) |
+| `jarvis_app/ui/push_to_talk.py` | F9 global key listener |
+
+**Safety rules (unchanged from v3):**
+- CONFIRM required for: apps, browser, web search, TradingView, focus modes
+- BLOCKED always: shell exec, read secrets, send messages, delete files, install packages
+- All actions logged to `~/.jarvis_app/action_log.jsonl`
+
 ## Jarvis assistant (`jarvis/`)
 
 A push-to-talk voice assistant that answers questions about the codebase using the graphify knowledge graph.

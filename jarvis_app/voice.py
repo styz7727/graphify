@@ -109,6 +109,61 @@ def transcribe(audio: "np.ndarray", language: str = "de") -> str:
         return ""
 
 
+def record_until_silence(
+    max_duration: float = 10.0,
+    silence_duration: float = 2.0,
+    silence_threshold: float = 0.015,
+    grace_period: float = 0.5,
+) -> "np.ndarray | None":
+    """Record until silence_duration seconds of quiet, or max_duration reached.
+
+    grace_period gives the user time to start speaking before silence detection
+    activates.  silence_threshold is the RMS level below which audio is silent.
+    """
+    import time as _time
+    try:
+        import sounddevice as sd
+        import numpy as np
+    except ImportError:
+        print("[STT] sounddevice fehlt")
+        return None
+
+    chunks: list = []
+    stop_event    = threading.Event()
+    silence_at: list = [None]   # [float | None] — mutable for closure
+    started_at    = _time.monotonic()
+
+    def _cb(indata, frames, t, status):
+        chunk = indata.copy().flatten()
+        chunks.append(chunk)
+        if _time.monotonic() - started_at < grace_period:
+            return
+        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        if rms < silence_threshold:
+            if silence_at[0] is None:
+                silence_at[0] = _time.monotonic()
+            elif _time.monotonic() - silence_at[0] >= silence_duration:
+                stop_event.set()
+        else:
+            silence_at[0] = None
+
+    try:
+        with sd.InputStream(
+            samplerate=_SAMPLE_RATE,
+            channels=1,
+            dtype="float32",
+            callback=_cb,
+        ):
+            stop_event.wait(timeout=max_duration)
+    except Exception as exc:
+        print(f"[STT] Aufnahme-Fehler: {exc}")
+        return None
+
+    if not chunks:
+        return None
+    return np.concatenate(chunks).flatten()
+
+
 def _load_whisper():
     global _whisper_model
     if _whisper_model is not None:
