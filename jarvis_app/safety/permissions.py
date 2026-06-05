@@ -22,6 +22,9 @@ _LEVELS: dict[str, SafetyLevel] = {
     "diagnostics":      SafetyLevel.SAFE,
     "help":             SafetyLevel.SAFE,
     "unknown":          SafetyLevel.SAFE,
+    "memory_save":      SafetyLevel.SAFE,
+    "memory_read":      SafetyLevel.SAFE,
+    "self_improve":     SafetyLevel.SAFE,
 
     # ── CONFIRM — requires user approval ─────────────────────────────────────
     "open_app":         SafetyLevel.CONFIRM,
@@ -30,6 +33,7 @@ _LEVELS: dict[str, SafetyLevel] = {
     "tradingview":      SafetyLevel.CONFIRM,
     "focus_mode":       SafetyLevel.CONFIRM,
     "calendar_prep":    SafetyLevel.CONFIRM,
+    "memory_delete":    SafetyLevel.CONFIRM,
 
     # ── BLOCKED — permanent refusal ───────────────────────────────────────────
     "shell_exec":       SafetyLevel.BLOCKED,
@@ -63,12 +67,19 @@ def is_blocked_input(text: str) -> bool:
 def describe(intent: str, entities: dict) -> str:
     """Human-readable description for confirmation dialogs."""
     target = entities.get("target") or entities.get("query") or entities.get("symbol") or ""
+    content = entities.get("content", "")
+    scope   = entities.get("scope", "last")
     descriptions = {
-        "open_app":     f"Programm öffnen: {target}",
-        "browser_open": f"Webseite öffnen: {target}",
-        "web_search":   f"Im Internet suchen: {target}",
-        "tradingview":  f"TradingView öffnen: {target}",
-        "focus_mode":   f"Modus starten: {target}",
-        "calendar_prep":f"Termin vorbereiten: {target}",
+        "open_app":      f"Programm öffnen: {target}",
+        "browser_open":  f"Webseite öffnen: {target}",
+        "web_search":    f"Im Internet suchen: {target}",
+        "tradingview":   f"TradingView öffnen: {target}",
+        "focus_mode":    f"Modus starten: {target}",
+        "calendar_prep": f"Termin vorbereiten: {target}",
+        "memory_delete": (
+            "Alle persönlichen Einträge löschen"
+            if scope == "all"
+            else f"Letzten Eintrag löschen: '{content}'"
+        ),
     }
     return descriptions.get(intent, f"{intent}: {target}")

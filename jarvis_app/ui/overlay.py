@@ -45,6 +45,8 @@ class Overlay(QWidget):
         self._ptw     = None   # PushToTalkWorker
         self._wwl     = None   # WakeWordListener
         self._auto    = None   # _WakeAutoThread
+        self._pulse_timer: QTimer | None = None
+        self._pulse_state: bool = False
         self._setup_window()
         self._build_ui()
         self._position_window()
@@ -114,8 +116,8 @@ class Overlay(QWidget):
         icon.setStyleSheet("font-size: 18px;")
         title = QLabel("Jarvis")
         title.setStyleSheet("font-size: 15px; font-weight: bold; color: #4ecca3;")
-        ver_lbl = QLabel("v5")
-        ver_lbl.setStyleSheet("font-size: 10px; color: #333; margin-left: 2px; margin-top: 4px;")
+        ver_lbl = QLabel("v6")
+        ver_lbl.setStyleSheet("font-size: 10px; color: #4ecca3; margin-left: 2px; margin-top: 4px; opacity: 0.6;")
 
         perm_btn = QPushButton("🔒")
         perm_btn.setFixedSize(28, 28)
@@ -306,7 +308,8 @@ class Overlay(QWidget):
         self._input.clear()
         self._tabs.setCurrentIndex(1)
         self._chat.add_user(text)
-        self._chat.add_system("⏳ Jarvis denkt…")
+        self._chat.show_typing()
+        self._start_thinking_anim()
         self._start_worker(text)
 
     def _submit_from_dashboard(self, cmd: str) -> None:
@@ -323,9 +326,33 @@ class Overlay(QWidget):
         self._worker.start()
 
     def _on_response(self, question: str, answer: str) -> None:
+        self._stop_thinking_anim()
+        self._chat.hide_typing()
         self._chat.add_jarvis(answer)
         # Resume wake word listener after response; 2 s delay avoids echo triggers
         QTimer.singleShot(2000, self._resume_wake_word)
+
+    # ── thinking animation ────────────────────────────────────────────────────
+
+    def _start_thinking_anim(self) -> None:
+        self._pulse_state = False
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.timeout.connect(self._pulse_tick)
+        self._pulse_timer.start(600)
+
+    def _stop_thinking_anim(self) -> None:
+        if self._pulse_timer:
+            self._pulse_timer.stop()
+            self._pulse_timer = None
+        self._set_idle_status()
+
+    def _pulse_tick(self) -> None:
+        self._pulse_state = not self._pulse_state
+        if self._pulse_state:
+            self._mic_btn.setStyleSheet(_MIC_THINKING_A_STYLE)
+            self._voice_status.setText("⏳ Jarvis denkt…")
+        else:
+            self._mic_btn.setStyleSheet(_MIC_THINKING_B_STYLE)
 
     def _on_confirm(self, description: str) -> None:
         from jarvis_app.safety.confirmation import ConfirmationDialog
@@ -444,5 +471,15 @@ _MIC_ACTIVE_STYLE = (
 
 _MIC_WAKEWORD_STYLE = (
     "QPushButton { background: #001a0d; border: 1px solid #4ecca3; "
+    "border-radius: 8px; font-size: 16px; }"
+)
+
+_MIC_THINKING_A_STYLE = (
+    "QPushButton { background: #0d1a2e; border: 2px solid #4ecca3; "
+    "border-radius: 8px; font-size: 16px; }"
+)
+
+_MIC_THINKING_B_STYLE = (
+    "QPushButton { background: #1a2e40; border: 1px solid #2a7a6a; "
     "border-radius: 8px; font-size: 16px; }"
 )

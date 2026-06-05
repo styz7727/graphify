@@ -12,14 +12,32 @@ from jarvis_app.safety.permissions import is_blocked_input
 
 # Priority-ordered: more specific patterns first to prevent early misfires
 _PRIORITY: list[str] = [
+    "memory_save", "memory_read", "memory_delete",
     "focus_mode", "tradingview", "browser_open", "web_search",
     "open_app", "notes_save", "notes_read",
     "reminders_set", "reminders_read",
     "git_summary", "weather", "calendar_prep",
-    "diagnostics", "help", "knowledge_query",
+    "self_improve", "diagnostics", "help", "knowledge_query",
 ]
 
 _KEYWORDS: dict[str, list[str]] = {
+    "memory_save": [
+        "merke dir das", "speicher das dauerhaft",
+        "ich heisse ", "mein name ist ", "ich bin geboren",
+        "mein geburtstag ist ", "ich wohne in ", "ich arbeite als ",
+        "ich spreche ", "meine sprache ist",
+    ],
+    "memory_read": [
+        "was weisst du über mich", "was weißt du über mich",
+        "was weisst du ueber mich", "was weisst du von mir",
+        "was hast du über mich gespeichert", "was hast du ueber mich",
+        "zeig meine gespeicherten", "meine persönlichen daten",
+    ],
+    "memory_delete": [
+        "vergiss das", "vergiss alles über mich", "vergiss alles ueber mich",
+        "lösch meine daten", "vergiss was du über mich weisst",
+        "vergiss was du ueber mich", "vergiss meine daten",
+    ],
     "focus_mode":      ["arbeitsmodus", "lernmodus", "tradingmodus", "schulmodus"],
     "tradingview":     ["tradingview", "kurs von ", "bitcoin chart", "btc chart",
                         "eth chart", "chart für", "chart von"],
@@ -40,8 +58,12 @@ _KEYWORDS: dict[str, list[str]] = {
     "weather":         ["wie ist das wetter", "wetter in ", "wetter heute",
                         "temperatur heute", "regnet es", "ist es kalt"],
     "calendar_prep":   ["termin mit ", "termin am ", "termin um "],
+    "self_improve":    ["analysiere dich", "selbstanalyse", "was kannst du verbessern",
+                        "jarvis selbstverbesserung", "zeig deine schwächen",
+                        "selbst-analyse"],
     "diagnostics":     ["warum funktioniert jarvis", "jarvis diagnose", "selbstprüfung"],
-    "help":            ["was kannst du", "befehle zeigen", "hilfe", " help"],
+    "help":            ["was kannst du", "befehle zeigen", "hilfe", " help",
+                        "was kann jarvis", "zeig alle befehle"],
     "knowledge_query": ["was macht", "erkläre mir", "wie funktioniert",
                         "was ist ", "architektur von", "codebase"],
 }
@@ -49,8 +71,31 @@ _KEYWORDS: dict[str, list[str]] = {
 # ── entity extractors ─────────────────────────────────────────────────────────
 
 def _extract(intent: str, text: str) -> dict:
-    t = text.strip()
+    t  = text.strip()
     tl = t.lower()
+
+    if intent == "memory_save":
+        label_map = {
+            "ich heisse ":         "Mein Name: ",
+            "mein name ist ":      "Mein Name: ",
+            "ich wohne in ":       "Ich wohne in: ",
+            "ich arbeite als ":    "Ich arbeite als: ",
+            "mein geburtstag ist ":"Geburtstag: ",
+            "ich bin geboren ":    "Geburtstag: ",
+            "ich spreche ":        "Sprache: ",
+        }
+        for marker, label in label_map.items():
+            if marker in tl:
+                idx  = tl.index(marker) + len(marker)
+                fact = t[idx:].strip().rstrip(".")
+                return {"content": label + fact}
+        return {"content": ""}   # empty → memory_skill reads last message
+
+    if intent == "memory_delete":
+        if "alles" in tl or "alle" in tl or "gesamt" in tl:
+            return {"scope": "all"}
+        return {"scope": "last"}
+
     if intent == "open_app":
         for prefix in ("öffne ", "starte ", "launch "):
             if tl.startswith(prefix):
@@ -84,7 +129,7 @@ def _extract(intent: str, text: str) -> dict:
                 return {"url": t[tl.index(marker) + len(marker):].strip()}
         return {"url": ""}
 
-    if intent in ("notes_save",):
+    if intent == "notes_save":
         for marker in ("notiere dir", "notiere:", "schreib auf", "merke dir", "notiz:"):
             if marker in tl:
                 idx = tl.index(marker) + len(marker)
@@ -132,6 +177,18 @@ def route(text: str, context: list[dict]) -> IntentResult:
         return IntentResult(intent="blocked", raw_text=text)
 
     tl = text.lower()
+
+    # Handle simple affirmatives when there's a pending clarification
+    from jarvis_app.memory.short_term import ShortTerm
+    pending = ShortTerm().get_pending()
+    if pending and tl.strip().rstrip(".!") in ("ja", "yes", "genau", "stimmt", "korrekt", "richtig", "ok", "okay"):
+        ShortTerm().clear_pending()
+        return IntentResult(
+            intent=pending["intent"],
+            entities=pending.get("entities", {}),
+            raw_text=text,
+        )
+
     for intent in _PRIORITY:
         for kw in _KEYWORDS.get(intent, []):
             if kw in tl:

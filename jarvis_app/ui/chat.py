@@ -22,12 +22,13 @@ class ChatWidget(QScrollArea):
 
         self._container = QWidget()
         self._layout = QVBoxLayout(self._container)
-        self._layout.setSpacing(6)
-        self._layout.setContentsMargins(8, 8, 8, 8)
+        self._layout.setSpacing(8)
+        self._layout.setContentsMargins(10, 10, 10, 10)
         self._layout.addStretch()
         self.setWidget(self._container)
 
         self._history: list[dict] = []
+        self._typing_label: QLabel | None = None
         self._load()
 
     # ── public API ─────────────────────────────────────────────────────────────
@@ -45,11 +46,35 @@ class ChatWidget(QScrollArea):
         self._save()
 
     def add_system(self, text: str) -> None:
-        label = QLabel(f"<i style='color:#666;font-size:11px'>{text}</i>")
+        label = QLabel(f"<i style='color:#555;font-size:10px'>{_esc(text)}</i>")
         label.setWordWrap(True)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setContentsMargins(0, 2, 0, 2)
         self._layout.insertWidget(self._layout.count() - 1, label)
         self._scroll_bottom()
+
+    def show_typing(self) -> None:
+        """Show animated typing indicator while Jarvis is processing."""
+        if self._typing_label is not None:
+            return
+        self._typing_label = QLabel(
+            '<div style="text-align:left;margin:2px 0">'
+            '<span style="font-size:10px;color:#555">🤖</span><br>'
+            '<span style="background:#16213e;color:#4ecca3;border-radius:10px;'
+            'padding:6px 14px;display:inline-block;font-style:italic;font-size:12px">'
+            '● ● ●</span></div>'
+        )
+        self._typing_label.setTextFormat(Qt.TextFormat.RichText)
+        self._typing_label.setWordWrap(True)
+        self._layout.insertWidget(self._layout.count() - 1, self._typing_label)
+        self._scroll_bottom()
+
+    def hide_typing(self) -> None:
+        """Remove the typing indicator."""
+        if self._typing_label is not None:
+            self._layout.removeWidget(self._typing_label)
+            self._typing_label.deleteLater()
+            self._typing_label = None
 
     # ── internals ──────────────────────────────────────────────────────────────
 
@@ -57,18 +82,21 @@ class ChatWidget(QScrollArea):
         ts = datetime.now().strftime("%H:%M")
         if is_user:
             html = (
-                f'<div style="text-align:right;margin:2px 0">'
-                f'<span style="font-size:10px;color:#666">{ts}</span><br>'
-                f'<span style="background:#0f3460;color:#e0e0e0;border-radius:10px;'
-                f'padding:6px 12px;display:inline-block;max-width:340px">{_esc(text)}</span>'
+                f'<div style="text-align:right;margin:3px 0">'
+                f'<span style="font-size:10px;color:#555">{ts}</span><br>'
+                f'<span style="background:#0f3460;color:#e0e0e0;border-radius:12px;'
+                f'padding:8px 14px;display:inline-block;max-width:360px;'
+                f'line-height:1.4">{_esc(text)}</span>'
                 f'</div>'
             )
         else:
             html = (
-                f'<div style="text-align:left;margin:2px 0">'
-                f'<span style="font-size:10px;color:#666">🤖 {ts}</span><br>'
-                f'<span style="background:#16213e;color:#e0e0e0;border-radius:10px;'
-                f'padding:6px 12px;display:inline-block;max-width:340px">{_esc(text)}</span>'
+                f'<div style="text-align:left;margin:3px 0">'
+                f'<span style="font-size:10px;color:#555">🤖 {ts}</span><br>'
+                f'<span style="background:#16213e;color:#e0e0e0;border-radius:12px;'
+                f'border-left:2px solid #4ecca3;'
+                f'padding:8px 14px;display:inline-block;max-width:360px;'
+                f'line-height:1.4">{_esc(text)}</span>'
                 f'</div>'
             )
         label = QLabel(html)

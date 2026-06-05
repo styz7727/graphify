@@ -16,15 +16,15 @@ from PyQt6.QtWidgets import (
 
 from jarvis_app import config
 
-_VERSION = "5"
+_VERSION = "6"
 
 
 class DebugPanel(QDialog):
-    """Debug & Diagnose dialog — Jarvis v5."""
+    """Debug & Diagnose dialog — Jarvis v6."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Dialog)
-        self.setWindowTitle("Jarvis — Debug & Diagnose (v5)")
+        self.setWindowTitle("Jarvis — Debug & Diagnose (v6)")
         self.resize(660, 540)
         self.setStyleSheet("""
             QDialog   { background: #1a1a2e; }
@@ -121,6 +121,26 @@ class DebugPanel(QDialog):
             h.addWidget(lbl_name)
             h.addWidget(lbl_msg, 1)
             vl.addWidget(row)
+
+        # ── Ollama status ──────────────────────────────────────────────────────
+        from jarvis_app.ollama_check import status_text
+        ollama_row = QWidget()
+        oh = QHBoxLayout(ollama_row)
+        oh.setContentsMargins(0, 0, 0, 0)
+        oh.setSpacing(10)
+        ollama_text = status_text()
+        is_ok = "läuft" in ollama_text and "kein Modell" not in ollama_text
+        ollama_ic = "✅" if is_ok else ("⚠️" if "läuft" in ollama_text else "ℹ️")
+        ollama_color = "#4ecca3" if is_ok else ("#ffa500" if "läuft" in ollama_text else "#666")
+        lbl_oname = QLabel(f"{ollama_ic}  Ollama (lokal)")
+        lbl_oname.setFixedWidth(210)
+        lbl_oname.setStyleSheet(f"color:{ollama_color}; font-weight:bold;")
+        lbl_omsg = QLabel(ollama_text)
+        lbl_omsg.setStyleSheet("color:#aaa; font-size:11px;")
+        lbl_omsg.setWordWrap(True)
+        oh.addWidget(lbl_oname)
+        oh.addWidget(lbl_omsg, 1)
+        vl.addWidget(ollama_row)
 
         vl.addStretch()
 
@@ -391,6 +411,10 @@ Zeige mir zuerst nur den Plan und frage dann um Bestätigung.
         lines.append(f"  Datenbank:  {config.DB_PATH}")
         lines.append(f"  Chat:       {config.CHAT_HISTORY_PATH}")
         lines.append(f"  Aktions-Log:{config.ACTION_LOG_PATH}")
+
+        lines += ["", "=== Ollama (lokal) ==="]
+        from jarvis_app.ollama_check import status_text as ollama_status
+        lines.append(f"  {ollama_status()}")
 
         repo = _find_repo_root()
         lines += ["", "=== Repository ==="]
