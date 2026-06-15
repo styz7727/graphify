@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import socket
+
 from graphify.security import (
     check_graph_file_size_cap,
     sanitize_label,
@@ -22,9 +24,18 @@ from graphify.security import (
     _MAX_TEXT_BYTES,
     _METADATA_MAX_LIST_ITEMS,
     _METADATA_MAX_VALUE_LEN,
+    _NoFileRedirectHandler,
     _sanitize_metadata_string,
     _sanitize_metadata_value,
+    _ssrf_guarded_socket,
 )
+
+
+def _patch_resolve(monkeypatch, ip_str: str, family: int = socket.AF_INET):
+    """Force graphify.security's socket.getaddrinfo to resolve to *ip_str*."""
+    def _fake(host, port, *args, **kwargs):
+        return [(family, socket.SOCK_STREAM, 6, "", (ip_str, 0))]
+    monkeypatch.setattr("graphify.security.socket.getaddrinfo", _fake)
 
 
 # ---------------------------------------------------------------------------
@@ -381,3 +392,124 @@ def test_sanitize_metadata_bool_not_coerced_to_int():
     assert out["flag_t"] is True
     assert out["flag_f"] is False
     assert out["num"] == 1
+
+
+# ---------------------------------------------------------------------------
+# validate_url — SSRF / private-IP blocking
+# ---------------------------------------------------------------------------
+
+def test_validate_url_blocks_loopback(monkeypatch):
+    _patch_resolve(monkeypatch, "127.0.0.1")
+    with pytest.raises(ValueError, match="private/internal IP"):
+        validate_url("http://localhost.example.com/")
+
+def test_validate_url_blocks_private_10(monkeypatch):
+    _patch_resolve(monkeypatch, "10.0.0.5")
+    with pytest.raises(ValueError, match="private/internal IP"):
+        validate_url("http://internal.example.com/")
+
+def test_validate_url_blocks_link_local_metadata(monkeypatch):
+    # 169.254.169.254 — the AWS/GCP metadata endpoint.
+    _patch_resolve(monkeypatch, "169.254.169.254")
+    with pytest.raises(ValueError, match="private/internal IP"):
+        validate_url("http://metadata.example.com/latest/meta-data/")
+
+def test_validate_url_blocks_cgn_shared_address_space(monkeypatch):
+    # RFC 6598 100.64.0.0/10 — is_private misses this on older Pythons.
+    _patch_resolve(monkeypatch, "100.64.1.1")
+    with pytest.raises(ValueError, match="private/internal IP"):
+        validate_url("http://cgn.example.com/")
+
+def test_validate_url_blocks_gcp_metadata_hostname():
+    # Blocked by the hostname allowlist before DNS resolution.
+    with pytest.raises(ValueError, match="metadata"):
+        validate_url("http://metadata.google.internal/")
+
+def test_validate_url_blocks_nat64_wrapping_private_ip(monkeypatch):
+    # 64:ff9b::7f00:1 embeds 127.0.0.1 — must inspect the embedded IPv4.
+    _patch_resolve(monkeypatch, "64:ff9b::7f00:1", family=socket.AF_INET6)
+    with pytest.raises(ValueError, match="private/internal IP"):
+        validate_url("http://nat64.example.com/")
+
+def test_validate_url_allows_nat64_wrapping_public_ip(monkeypatch):
+    # 64:ff9b::808:808 embeds 8.8.8.8 (public) — legitimate, must pass.
+    _patch_resolve(monkeypatch, "64:ff9b::808:808", family=socket.AF_INET6)
+    assert validate_url("http://nat64.example.com/") == "http://nat64.example.com/"
+
+def test_validate_url_allows_public_ip(monkeypatch):
+    _patch_resolve(monkeypatch, "8.8.8.8")
+    assert validate_url("http://public.example.com/") == "http://public.example.com/"
+
+def test_validate_url_dns_failure_raises(monkeypatch):
+    def _boom(host, port, *args, **kwargs):
+        raise socket.gaierror("name resolution failed")
+    monkeypatch.setattr("graphify.security.socket.getaddrinfo", _boom)
+    with pytest.raises(ValueError, match="DNS resolution failed"):
+        validate_url("http://nonexistent.invalid/")
+
+
+# ---------------------------------------------------------------------------
+# _ssrf_guarded_socket — DNS-rebinding (TOCTOU) guard
+# ---------------------------------------------------------------------------
+
+def test_ssrf_guarded_socket_blocks_private_rebind(monkeypatch):
+    # Original resolver returns a private IP at connect time → OSError.
+    def _fake(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.9", 80))]
+    monkeypatch.setattr(socket, "getaddrinfo", _fake)
+    with _ssrf_guarded_socket():
+        with pytest.raises(OSError, match="SSRF blocked"):
+            socket.getaddrinfo("evil.example.com", 80)
+
+def test_ssrf_guarded_socket_allows_public(monkeypatch):
+    def _fake(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))]
+    monkeypatch.setattr(socket, "getaddrinfo", _fake)
+    with _ssrf_guarded_socket():
+        result = socket.getaddrinfo("example.com", 80)
+    assert result[0][4][0] == "93.184.216.34"
+
+def test_ssrf_guarded_socket_skips_non_ip_addr(monkeypatch):
+    # A non-IP address string (e.g. AF_UNIX path) must be skipped, not crash.
+    def _fake(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not-an-ip", 0))]
+    monkeypatch.setattr(socket, "getaddrinfo", _fake)
+    with _ssrf_guarded_socket():
+        result = socket.getaddrinfo("h", 0)
+    assert result[0][4][0] == "not-an-ip"
+
+def test_ssrf_guarded_socket_restores_original(monkeypatch):
+    sentinel = socket.getaddrinfo
+    with _ssrf_guarded_socket():
+        assert socket.getaddrinfo is not sentinel
+    assert socket.getaddrinfo is sentinel
+
+
+# ---------------------------------------------------------------------------
+# _NoFileRedirectHandler — open-redirect SSRF guard
+# ---------------------------------------------------------------------------
+
+def test_redirect_handler_rejects_file_scheme():
+    handler = _NoFileRedirectHandler()
+    with pytest.raises(ValueError, match="scheme"):
+        handler.redirect_request(
+            MagicMock(), MagicMock(), 302, "Found", {}, "file:///etc/passwd"
+        )
+
+def test_redirect_handler_rejects_private_redirect(monkeypatch):
+    _patch_resolve(monkeypatch, "127.0.0.1")
+    handler = _NoFileRedirectHandler()
+    with pytest.raises(ValueError, match="private/internal IP"):
+        handler.redirect_request(
+            MagicMock(), MagicMock(), 302, "Found", {}, "http://internal.example.com/"
+        )
+
+def test_redirect_handler_allows_public_redirect(monkeypatch):
+    import urllib.request
+    _patch_resolve(monkeypatch, "8.8.8.8")
+    handler = _NoFileRedirectHandler()
+    req = urllib.request.Request("http://example.com/")
+    new_req = handler.redirect_request(
+        req, None, 302, "Found", {}, "http://elsewhere.example.com/"
+    )
+    assert new_req.full_url == "http://elsewhere.example.com/"

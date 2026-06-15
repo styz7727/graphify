@@ -120,6 +120,28 @@ norecursedirs = [
     "scripts", "ebook", ".github", "dist", "build",
 ]
 
+[tool.coverage.run]
+source = ["graphify"]
+omit = [
+    "graphify/skills/*",
+    "graphify/*.md",
+]
+
+[tool.coverage.report]
+# Lock in the current baseline; ratchet upward as coverage improves.
+fail_under = 70
+precision = 1
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    # Optional-dependency import fallbacks are environment-specific.
+    "except ImportError",
+    "raise ImportError",
+]
+
 [tool.bandit]
 skips = ["B404"]
 

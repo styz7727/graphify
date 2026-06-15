@@ -472,182 +472,14 @@ def _filter_blank_stdin() -> None:
     sys.stdin = open(0, "r", closefd=False)
 
 
-def serve(graph_path: str = "graphify-out/graph.json") -> None:
-    """Start the MCP server. Requires pip install mcp."""
-    import threading
+def build_tool_handlers(
+    G: nx.Graph, communities: dict[int, list[str]], graph_path: str
+) -> dict[str, object]:
+    """Build the MCP tool-name -> handler mapping.
 
-    try:
-        from mcp.server import Server
-        from mcp.server.stdio import stdio_server
-        from mcp import types
-        from mcp.types import AnyUrl
-    except ImportError as e:
-        raise ImportError('mcp not installed. Run: pip install "graphifyy[mcp]"') from e
-
-    G = _load_graph(graph_path)
-    communities = _communities_from_graph(G)
-
-    # Hot-reload state: mtime+size key lets us detect graph.json changes without
-    # polling. Initialised from the file stat at startup so the first tool call
-    # never triggers a redundant reload.
-    _reload_lock = threading.Lock()
-    try:
-        _s = Path(graph_path).stat()
-        _reload_state: dict = {"mtime_ns": _s.st_mtime_ns, "size": _s.st_size}
-    except FileNotFoundError:
-        _reload_state = {"mtime_ns": 0, "size": -1}
-
-    def _maybe_reload() -> None:
-        nonlocal G, communities
-        try:
-            s = Path(graph_path).stat()
-            key = (s.st_mtime_ns, s.st_size)
-        except FileNotFoundError:
-            return
-        if key == (_reload_state["mtime_ns"], _reload_state["size"]):
-            return
-        with _reload_lock:
-            try:
-                s = Path(graph_path).stat()
-                key = (s.st_mtime_ns, s.st_size)
-            except FileNotFoundError:
-                return
-            if key == (_reload_state["mtime_ns"], _reload_state["size"]):
-                return  # another thread already reloaded
-            try:
-                new_G = _load_graph(graph_path)
-            except SystemExit:
-                return  # keep serving stale graph on transient read error
-            G = new_G
-            communities = _communities_from_graph(new_G)
-            _reload_state["mtime_ns"], _reload_state["size"] = key
-
-    server = Server("graphify")
-
-    @server.list_tools()
-    async def list_tools() -> list[types.Tool]:
-        return [
-            types.Tool(
-                name="query_graph",
-                description="Search the knowledge graph using BFS or DFS. Returns relevant nodes and edges as text context.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "question": {"type": "string", "description": "Natural language question or keyword search"},
-                        "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs",
-                                 "description": "bfs=broad context, dfs=trace a specific path"},
-                        "depth": {"type": "integer", "default": 3, "description": "Traversal depth (1-6)"},
-                        "token_budget": {"type": "integer", "default": 2000, "description": "Max output tokens"},
-                        "context_filter": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional explicit edge-context filter, e.g. ['call', 'field']",
-                        },
-                    },
-                    "required": ["question"],
-                },
-            ),
-            types.Tool(
-                name="get_node",
-                description="Get full details for a specific node by label or ID.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {"label": {"type": "string", "description": "Node label or ID to look up"}},
-                    "required": ["label"],
-                },
-            ),
-            types.Tool(
-                name="get_neighbors",
-                description="Get all direct neighbors of a node with edge details.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "label": {"type": "string"},
-                        "relation_filter": {"type": "string", "description": "Optional: filter by relation type"},
-                    },
-                    "required": ["label"],
-                },
-            ),
-            types.Tool(
-                name="get_community",
-                description="Get all nodes in a community by community ID.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {"community_id": {"type": "integer", "description": "Community ID (0-indexed by size)"}},
-                    "required": ["community_id"],
-                },
-            ),
-            types.Tool(
-                name="god_nodes",
-                description="Return the most connected nodes - the core abstractions of the knowledge graph.",
-                inputSchema={"type": "object", "properties": {"top_n": {"type": "integer", "default": 10}}},
-            ),
-            types.Tool(
-                name="graph_stats",
-                description="Return summary statistics: node count, edge count, communities, confidence breakdown.",
-                inputSchema={"type": "object", "properties": {}},
-            ),
-            types.Tool(
-                name="shortest_path",
-                description="Find the shortest path between two concepts in the knowledge graph.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "source": {"type": "string", "description": "Source concept label or keyword"},
-                        "target": {"type": "string", "description": "Target concept label or keyword"},
-                        "max_hops": {"type": "integer", "default": 8, "description": "Maximum hops to consider"},
-                    },
-                    "required": ["source", "target"],
-                },
-            ),
-            types.Tool(
-                name="list_prs",
-                description=(
-                    "List open GitHub PRs with CI status, review state, and graph impact "
-                    "(which communities each PR touches, blast radius). Use this before starting "
-                    "work to check if a PR already covers the area you're about to change."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
-                        "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
-                    },
-                },
-            ),
-            types.Tool(
-                name="get_pr_impact",
-                description=(
-                    "Get detailed graph impact for a specific PR: which files it changes, "
-                    "which knowledge-graph communities are affected, and how many nodes are touched. "
-                    "Use this to assess merge risk or check for overlap with your current work."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "pr_number": {"type": "integer", "description": "PR number to analyse"},
-                        "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
-                    },
-                    "required": ["pr_number"],
-                },
-            ),
-            types.Tool(
-                name="triage_prs",
-                description=(
-                    "Return all actionable open PRs (correct base, not stale) with full graph impact data "
-                    "so you can reason about review priority, merge order, and conflict risk. "
-                    "Call this when the user asks 'what PRs should I review?' or 'what's ready to merge?'"
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
-                        "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
-                    },
-                },
-            ),
-        ]
-
+    Extracted to module scope so the per-tool handlers can be unit-tested
+    without the optional ``mcp`` dependency or a running stdio server.
+    """
     def _tool_query_graph(arguments: dict) -> str:
         import time as _time
         from graphify import querylog
@@ -908,6 +740,186 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
         "get_pr_impact": _tool_get_pr_impact,
         "triage_prs": _tool_triage_prs,
     }
+    return _handlers
+
+
+def serve(graph_path: str = "graphify-out/graph.json") -> None:
+    """Start the MCP server. Requires pip install mcp."""
+    import threading
+
+    try:
+        from mcp.server import Server
+        from mcp.server.stdio import stdio_server
+        from mcp import types
+        from mcp.types import AnyUrl
+    except ImportError as e:
+        raise ImportError('mcp not installed. Run: pip install "graphifyy[mcp]"') from e
+
+    G = _load_graph(graph_path)
+    communities = _communities_from_graph(G)
+
+    # Hot-reload state: mtime+size key lets us detect graph.json changes without
+    # polling. Initialised from the file stat at startup so the first tool call
+    # never triggers a redundant reload.
+    _reload_lock = threading.Lock()
+    try:
+        _s = Path(graph_path).stat()
+        _reload_state: dict = {"mtime_ns": _s.st_mtime_ns, "size": _s.st_size}
+    except FileNotFoundError:
+        _reload_state = {"mtime_ns": 0, "size": -1}
+
+    def _maybe_reload() -> None:
+        nonlocal G, communities
+        try:
+            s = Path(graph_path).stat()
+            key = (s.st_mtime_ns, s.st_size)
+        except FileNotFoundError:
+            return
+        if key == (_reload_state["mtime_ns"], _reload_state["size"]):
+            return
+        with _reload_lock:
+            try:
+                s = Path(graph_path).stat()
+                key = (s.st_mtime_ns, s.st_size)
+            except FileNotFoundError:
+                return
+            if key == (_reload_state["mtime_ns"], _reload_state["size"]):
+                return  # another thread already reloaded
+            try:
+                new_G = _load_graph(graph_path)
+            except SystemExit:
+                return  # keep serving stale graph on transient read error
+            G = new_G
+            communities = _communities_from_graph(new_G)
+            _reload_state["mtime_ns"], _reload_state["size"] = key
+
+    server = Server("graphify")
+
+    @server.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        return [
+            types.Tool(
+                name="query_graph",
+                description="Search the knowledge graph using BFS or DFS. Returns relevant nodes and edges as text context.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "Natural language question or keyword search"},
+                        "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs",
+                                 "description": "bfs=broad context, dfs=trace a specific path"},
+                        "depth": {"type": "integer", "default": 3, "description": "Traversal depth (1-6)"},
+                        "token_budget": {"type": "integer", "default": 2000, "description": "Max output tokens"},
+                        "context_filter": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional explicit edge-context filter, e.g. ['call', 'field']",
+                        },
+                    },
+                    "required": ["question"],
+                },
+            ),
+            types.Tool(
+                name="get_node",
+                description="Get full details for a specific node by label or ID.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"label": {"type": "string", "description": "Node label or ID to look up"}},
+                    "required": ["label"],
+                },
+            ),
+            types.Tool(
+                name="get_neighbors",
+                description="Get all direct neighbors of a node with edge details.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "relation_filter": {"type": "string", "description": "Optional: filter by relation type"},
+                    },
+                    "required": ["label"],
+                },
+            ),
+            types.Tool(
+                name="get_community",
+                description="Get all nodes in a community by community ID.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"community_id": {"type": "integer", "description": "Community ID (0-indexed by size)"}},
+                    "required": ["community_id"],
+                },
+            ),
+            types.Tool(
+                name="god_nodes",
+                description="Return the most connected nodes - the core abstractions of the knowledge graph.",
+                inputSchema={"type": "object", "properties": {"top_n": {"type": "integer", "default": 10}}},
+            ),
+            types.Tool(
+                name="graph_stats",
+                description="Return summary statistics: node count, edge count, communities, confidence breakdown.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            types.Tool(
+                name="shortest_path",
+                description="Find the shortest path between two concepts in the knowledge graph.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string", "description": "Source concept label or keyword"},
+                        "target": {"type": "string", "description": "Target concept label or keyword"},
+                        "max_hops": {"type": "integer", "default": 8, "description": "Maximum hops to consider"},
+                    },
+                    "required": ["source", "target"],
+                },
+            ),
+            types.Tool(
+                name="list_prs",
+                description=(
+                    "List open GitHub PRs with CI status, review state, and graph impact "
+                    "(which communities each PR touches, blast radius). Use this before starting "
+                    "work to check if a PR already covers the area you're about to change."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
+                        "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
+                    },
+                },
+            ),
+            types.Tool(
+                name="get_pr_impact",
+                description=(
+                    "Get detailed graph impact for a specific PR: which files it changes, "
+                    "which knowledge-graph communities are affected, and how many nodes are touched. "
+                    "Use this to assess merge risk or check for overlap with your current work."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "pr_number": {"type": "integer", "description": "PR number to analyse"},
+                        "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
+                    },
+                    "required": ["pr_number"],
+                },
+            ),
+            types.Tool(
+                name="triage_prs",
+                description=(
+                    "Return all actionable open PRs (correct base, not stale) with full graph impact data "
+                    "so you can reason about review priority, merge order, and conflict risk. "
+                    "Call this when the user asks 'what PRs should I review?' or 'what's ready to merge?'"
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "base": {"type": "string", "description": "Base branch to filter PRs by (auto-detected if omitted)"},
+                        "repo": {"type": "string", "description": "GitHub repo (owner/repo). Defaults to current repo."},
+                    },
+                },
+            ),
+        ]
+
+    _handlers = build_tool_handlers(G, communities, graph_path)
 
     def _load_community_labels() -> dict[int, str]:
         labels_path = Path(graph_path).parent / ".graphify_labels.json"
@@ -939,9 +951,9 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
                 return report_path.read_text(encoding="utf-8")
             return "GRAPH_REPORT.md not found. Run graphify extract first."
         if uri_str == "graphify://stats":
-            return _tool_graph_stats({})
+            return _handlers["graph_stats"]({})
         if uri_str == "graphify://god-nodes":
-            return _tool_god_nodes({"top_n": 10})
+            return _handlers["god_nodes"]({"top_n": 10})
         if uri_str == "graphify://surprises":
             try:
                 from graphify.analyze import surprising_connections
